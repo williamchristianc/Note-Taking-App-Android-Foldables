@@ -1,36 +1,85 @@
-# This is a basic workflow to help you get started with Actions
+name: Build Folio APK
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+  push:
+    paths:
+      - Folio.zip
+      - .github/workflows/blank.yml
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  contents: read
+
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Unpack Folio source
+        shell: bash
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/folio-src"
+          unzip -q Folio.zip -d "$RUNNER_TEMP/folio-src"
+          DIR="$RUNNER_TEMP/folio-src/Folio"
+          test -f "$DIR/settings.gradle.kts"
+          test -f "$DIR/app/build.gradle.kts"
+          echo "FOLIO_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "Building source at: $DIR"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Standard x64 ubuntu-24.04 runners already have Android SDK 35.
+      # Do not run android-actions/setup-android or sdkmanager --licenses.
+      - name: Check preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
+          echo "Android SDK 35 and build tools are ready."
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          cd "$FOLIO_DIR"
+          gradle :app:assembleDebug --no-daemon --console=plain --stacktrace \
+            2>&1 | tee "$GITHUB_WORKSPACE/folio-build.log"
+          RESULT=${PIPESTATUS[0]}
+          if [ "$RESULT" -ne 0 ]; then
+            echo '=== COMPILATION ERROR HIGHLIGHTS ==='
+            grep -nEi '(^e: |error:|what went wrong|unresolved reference|could not resolve|could not find|execution failed|compilation error)' \
+              "$GITHUB_WORKSPACE/folio-build.log" | head -n 80 || true
+          fi
+          exit "$RESULT"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-build-log
+          path: folio-build.log
+          if-no-files-found: ignore
+
+      - name: Upload installable APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: folio-debug-apk
+          path: ${{ env.FOLIO_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
