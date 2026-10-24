@@ -5,11 +5,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Locate project
+      - name: Unpack project
         run: |
-          DIR=$(dirname "$(find . -name settings.gradle.kts -not -path './.git/*' | head -n1)")
-          echo "Project dir: $DIR"
-          echo "PROJECT_DIR=$DIR" >> $GITHUB_ENV
+          ZIP=$(find . -name Folio.zip -not -path './.git/*' | head -n1)
+          echo "Using $ZIP"
+          unzip -q "$ZIP" -d /tmp/proj
+          ls /tmp/proj/Folio
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -18,8 +19,8 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Build debug APK
-        run: cd "$PROJECT_DIR" && gradle assembleDebug --no-daemon --stacktrace
+        run: cd /tmp/proj/Folio && gradle assembleDebug --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: folio-debug-apk
-          path: '**/outputs/apk/debug/app-debug.apk'
+          path: /tmp/proj/Folio/app/build/outputs/apk/debug/app-debug.apk
